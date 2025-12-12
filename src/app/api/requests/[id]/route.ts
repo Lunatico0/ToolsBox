@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+import { requireAdminSession } from "@/lib/auth";
 import { dbConnect } from "@/lib/mongoose";
 import { Request as RequestModel } from "@/models/Request";
 import { Tool } from "@/models/Tool";
@@ -16,17 +17,18 @@ export async function PATCH(
   { params }: { params: { id: string } },
 ) {
   try {
+    requireAdminSession();
     const payload = await request.json();
     const data = actionSchema.parse(payload);
 
     await dbConnect();
-    const existing = await RequestModel.findById(params.id).populate("tool");
+    const existing = await RequestModel.findById(params.id)
+      .populate("tools")
+      .populate("user");
 
     if (!existing) {
       return NextResponse.json({ message: "Solicitud no encontrada" }, { status: 404 });
     }
-
-    const toolId = typeof existing.tool === "string" ? existing.tool : existing.tool._id;
 
     if (data.action === "approve") {
       if (!data.approver) {
@@ -43,14 +45,16 @@ export async function PATCH(
         );
       }
 
-      const tool = await Tool.findById(toolId);
-      if (!tool) {
-        return NextResponse.json({ message: "Herramienta no encontrada" }, { status: 404 });
-      }
+      const tools = await Tool.find({ _id: { $in: existing.tools } });
 
-      if (tool.status !== "available") {
+      const unavailable = tools.filter((tool) => tool.status !== "available");
+      if (unavailable.length > 0) {
         return NextResponse.json(
-          { message: "La herramienta ya está asignada" },
+          {
+            message: `Las siguientes herramientas ya no están disponibles: ${unavailable
+              .map((t) => t.name)
+              .join(", ")}`,
+          },
           { status: 400 },
         );
       }
@@ -59,11 +63,15 @@ export async function PATCH(
       existing.approver = data.approver;
       existing.approvedAt = new Date();
 
-      tool.status = "assigned";
-      tool.assignedTo = existing.technician;
-      tool.assignedAt = new Date();
+      await Tool.updateMany(
+        { _id: { $in: existing.tools } },
+        {
+          status: "assigned",
+          assignedTo: existing.technicianName,
+          assignedAt: new Date(),
+        },
+      );
 
-      await tool.save();
       await existing.save();
 
       return NextResponse.json({ request: existing });
@@ -80,11 +88,10 @@ export async function PATCH(
     existing.returnedAt = new Date();
     existing.returnNotes = data.returnNotes ?? existing.returnNotes;
 
-    await Tool.findByIdAndUpdate(toolId, {
-      status: "available",
-      assignedAt: null,
-      assignedTo: null,
-    });
+    await Tool.updateMany(
+      { _id: { $in: existing.tools } },
+      { status: "available", assignedAt: null, assignedTo: null },
+    );
 
     await existing.save();
 
@@ -92,6 +99,10 @@ export async function PATCH(
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ message: error.message }, { status: 400 });
+    }
+
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return NextResponse.json({ message: "No autorizado" }, { status: 401 });
     }
 
     console.error(`PATCH /api/requests/${params.id} error`, error);

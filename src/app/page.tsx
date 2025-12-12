@@ -3,9 +3,28 @@
 import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 
-import type { RequestDTO, ToolDTO } from "@/types/inventory";
+import type { RequestDTO, ToolDTO, UserDTO } from "@/types/inventory";
 
 const demoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+
+const demoUsers: UserDTO[] = [
+  {
+    _id: "user-1",
+    firstName: "María",
+    lastName: "Ponce",
+    dni: "11223344",
+    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7).toISOString(),
+    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7).toISOString(),
+  },
+  {
+    _id: "user-2",
+    firstName: "Julián",
+    lastName: "Rivero",
+    dni: "22334455",
+    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 5).toISOString(),
+    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 5).toISOString(),
+  },
+];
 
 const demoTools: ToolDTO[] = [
   {
@@ -52,8 +71,9 @@ const demoTools: ToolDTO[] = [
 const demoRequests: RequestDTO[] = [
   {
     _id: "req-1",
-    tool: demoTools[0],
-    technician: "María Ponce",
+    tools: [demoTools[0]],
+    user: demoUsers[0],
+    technicianName: "María Ponce",
     purpose: "Mantenimiento preventivo",
     status: "approved",
     approver: "Supervisor Omar",
@@ -66,9 +86,10 @@ const demoRequests: RequestDTO[] = [
   },
   {
     _id: "req-2",
-    tool: demoTools[1],
-    technician: "Julián Rivero",
-    purpose: "Ajuste de torque",
+    tools: [demoTools[1], demoTools[2]],
+    user: demoUsers[1],
+    technicianName: "Julián Rivero",
+    purpose: "Kit de torque y medición",
     status: "pending",
     approver: "",
     requestedAt: new Date(Date.now() - 1000 * 60 * 60 * 4).toISOString(),
@@ -97,11 +118,16 @@ function formatDate(date?: string | null) {
 }
 
 export default function Home() {
-  const [tools, setTools] = useState<ToolDTO[]>([]);
-  const [requests, setRequests] = useState<RequestDTO[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState<string | null>(null);
+  const [adminName, setAdminName] = useState<string | null>(demoMode ? "Demo" : null);
+  const [tools, setTools] = useState<ToolDTO[]>(demoMode ? demoTools : []);
+  const [requests, setRequests] = useState<RequestDTO[]>(demoMode ? demoRequests : []);
+  const [users, setUsers] = useState<UserDTO[]>(demoMode ? demoUsers : []);
+  const [loading, setLoading] = useState(!demoMode);
+  const [message, setMessage] = useState<string | null>(
+    demoMode ? "Vista demo activa: los cambios no se guardan en base de datos" : null,
+  );
   const [error, setError] = useState<string | null>(null);
+
   const [toolForm, setToolForm] = useState({
     name: "",
     brand: "",
@@ -109,11 +135,20 @@ export default function Home() {
     description: "",
     location: { shelf: "", column: "", row: "" },
   });
-  const [requestForm, setRequestForm] = useState({
-    toolId: "",
-    technician: "",
-    purpose: "",
+
+  const [userForm, setUserForm] = useState({
+    firstName: "",
+    lastName: "",
+    dni: "",
   });
+
+  const [requestForm, setRequestForm] = useState({
+    technicianDni: "",
+    purpose: "",
+    toolIds: [] as string[],
+  });
+
+  const [authForm, setAuthForm] = useState({ email: "", password: "" });
   const [approvers, setApprovers] = useState<Record<string, string>>({});
   const [returnNotes, setReturnNotes] = useState<Record<string, string>>({});
 
@@ -134,9 +169,6 @@ export default function Home() {
 
   async function fetchData() {
     if (demoMode) {
-      setTools(demoTools);
-      setRequests(demoRequests);
-      setMessage("Vista demo activa: los cambios no se guardan en base de datos");
       setLoading(false);
       return;
     }
@@ -145,19 +177,29 @@ export default function Home() {
     setError(null);
 
     try {
-      const [toolsRes, requestsRes] = await Promise.all([
-        fetch("/api/tools"),
-        fetch("/api/requests"),
+      const [toolsRes, requestsRes, usersRes] = await Promise.all([
+        fetch("/api/tools", { credentials: "include" }),
+        fetch("/api/requests", { credentials: "include" }),
+        fetch("/api/users", { credentials: "include" }),
       ]);
+
+      if (toolsRes.status === 401 || requestsRes.status === 401 || usersRes.status === 401) {
+        setError("Inicie sesión como administrador para continuar");
+        setLoading(false);
+        return;
+      }
 
       const toolsJson = await toolsRes.json();
       const requestsJson = await requestsRes.json();
+      const usersJson = await usersRes.json();
 
       if (!toolsRes.ok) throw new Error(toolsJson.message || "Error al cargar herramientas");
       if (!requestsRes.ok) throw new Error(requestsJson.message || "Error al cargar solicitudes");
+      if (!usersRes.ok) throw new Error(usersJson.message || "Error al cargar usuarios");
 
       setTools(toolsJson.tools);
       setRequests(requestsJson.requests);
+      setUsers(usersJson.users);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Error inesperado";
       setError(message);
@@ -167,13 +209,48 @@ export default function Home() {
   }
 
   useEffect(() => {
-    fetchData();
+    if (!demoMode) {
+      fetchData();
+    }
   }, []);
 
   const resetMessages = () => {
     setMessage(null);
     setError(null);
   };
+
+  async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    resetMessages();
+
+    try {
+      const res = await fetch("/api/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(authForm),
+        credentials: "include",
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "No se pudo iniciar sesión");
+
+      setAdminName(data.admin.name);
+      setMessage("Sesión de administrador iniciada");
+      fetchData();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error al iniciar sesión";
+      setError(message);
+    }
+  }
+
+  async function handleLogout() {
+    await fetch("/api/admin/logout", { method: "POST" });
+    setAdminName(null);
+    setMessage("Sesión cerrada");
+    setTools([]);
+    setRequests([]);
+    setUsers([]);
+  }
 
   async function handleCreateTool(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -202,557 +279,740 @@ export default function Home() {
       return;
     }
 
-    const response = await fetch("/api/tools", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(toolForm),
-    });
+    try {
+      const res = await fetch("/api/tools", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(toolForm),
+        credentials: "include",
+      });
 
-    const data = await response.json();
-    if (!response.ok) {
-      setError(data.message || "No se pudo crear la herramienta");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "No se pudo crear la herramienta");
+
+      setTools((prev) => [data.tool, ...prev]);
+      setToolForm({
+        name: "",
+        brand: "",
+        model: "",
+        description: "",
+        location: { shelf: "", column: "", row: "" },
+      });
+      setMessage("Herramienta creada");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error inesperado";
+      setError(message);
+    }
+  }
+
+  async function handleCreateUser(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    resetMessages();
+
+    if (demoMode) {
+      const newUser: UserDTO = {
+        _id: crypto.randomUUID?.() ?? String(Date.now()),
+        ...userForm,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      setUsers((prev) => [newUser, ...prev]);
+      setMessage("Usuario creado en modo demo");
+      setUserForm({ firstName: "", lastName: "", dni: "" });
       return;
     }
 
-    setMessage("Herramienta creada correctamente");
-    setToolForm({
-      name: "",
-      brand: "",
-      model: "",
-      description: "",
-      location: { shelf: "", column: "", row: "" },
-    });
-    fetchData();
+    try {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(userForm),
+        credentials: "include",
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "No se pudo crear el usuario");
+
+      setUsers((prev) => [data.user, ...prev]);
+      setUserForm({ firstName: "", lastName: "", dni: "" });
+      setMessage("Usuario dado de alta");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error inesperado";
+      setError(message);
+    }
   }
 
   async function handleCreateRequest(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     resetMessages();
 
+    if (requestForm.toolIds.length === 0) {
+      setError("Seleccione al menos una herramienta");
+      return;
+    }
+
     if (demoMode) {
-      const now = new Date().toISOString();
+      const user = users.find((u) => u.dni === requestForm.technicianDni.trim());
+      if (!user) {
+        setError("No se encontró un usuario con ese DNI");
+        return;
+      }
+
+      const selectedTools = tools.filter((tool) => requestForm.toolIds.includes(tool._id));
+      const unavailable = selectedTools.filter((tool) => tool.status !== "available");
+      if (unavailable.length > 0) {
+        setError(
+          `Las siguientes herramientas no están disponibles: ${unavailable
+            .map((t) => t.name)
+            .join(", ")}`,
+        );
+        return;
+      }
+
       const newRequest: RequestDTO = {
         _id: crypto.randomUUID?.() ?? String(Date.now()),
-        tool: requestForm.toolId,
-        technician: requestForm.technician,
+        tools: selectedTools,
+        user,
+        technicianName: `${user.firstName} ${user.lastName}`,
         purpose: requestForm.purpose,
         status: "pending",
         approver: "",
-        requestedAt: now,
+        requestedAt: new Date().toISOString(),
         approvedAt: null,
         returnedAt: null,
         returnNotes: "",
-        createdAt: now,
-        updatedAt: now,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
 
-      setRequests((prev) => [...prev, newRequest]);
-      setMessage("Solicitud creada en modo demo");
-      setRequestForm({ toolId: "", technician: "", purpose: "" });
+      setRequests((prev) => [newRequest, ...prev]);
+      setRequestForm({ technicianDni: "", purpose: "", toolIds: [] });
+      setMessage("Solicitud generada en modo demo");
       return;
     }
 
-    const response = await fetch("/api/requests", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestForm),
-    });
+    try {
+      const res = await fetch("/api/requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestForm),
+        credentials: "include",
+      });
 
-    const data = await response.json();
-    if (!response.ok) {
-      setError(data.message || "No se pudo registrar la solicitud");
-      return;
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "No se pudo crear la solicitud");
+
+      setRequests((prev) => [data.request, ...prev]);
+      setRequestForm({ technicianDni: "", purpose: "", toolIds: [] });
+      setMessage("Solicitud creada");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error inesperado";
+      setError(message);
     }
-
-    setMessage("Solicitud enviada al aprobador");
-    setRequestForm({ toolId: "", technician: "", purpose: "" });
-    fetchData();
   }
 
-  async function handleApprove(requestId: string) {
+  async function handleApprove(id: string) {
     resetMessages();
-    const approver = approvers[requestId]?.trim();
-
+    const approver = approvers[id];
     if (!approver) {
-      setError("Ingresá el nombre del aprobador para continuar");
+      setError("Ingrese el nombre del aprobador");
       return;
     }
 
     if (demoMode) {
       setRequests((prev) =>
-        prev.map((req) =>
-          req._id === requestId
-            ? {
-                ...req,
-                approver,
-                status: "approved",
-                approvedAt: new Date().toISOString(),
-              }
-            : req,
-        ),
+        prev.map((req) => {
+          if (req._id !== id) return req;
+          const selectedTools = tools.filter((tool) =>
+            (req.tools as ToolDTO[]).map((t) => t._id).includes(tool._id),
+          );
+          const unavailable = selectedTools.filter((tool) => tool.status !== "available");
+          if (unavailable.length > 0) {
+            setError(
+              `Las siguientes herramientas ya no están disponibles: ${unavailable
+                .map((t) => t.name)
+                .join(", ")}`,
+            );
+            return req;
+          }
+
+          const now = new Date().toISOString();
+          setTools((prevTools) =>
+            prevTools.map((tool) =>
+              (req.tools as ToolDTO[]).find((t) => t._id === tool._id)
+                ? {
+                    ...tool,
+                    status: "assigned",
+                    assignedTo: req.technicianName,
+                    assignedAt: now,
+                  }
+                : tool,
+            ),
+          );
+
+          return {
+            ...req,
+            status: "approved",
+            approver,
+            approvedAt: now,
+            updatedAt: now,
+          };
+        }),
       );
+      setMessage("Solicitud aprobada en modo demo");
+      return;
+    }
 
-      setTools((prev) => {
-        const request = prev && prev.length ? requests.find((r) => r._id === requestId) : undefined;
-        const toolId = request?.tool && typeof request.tool !== "string" ? request.tool._id : request?.tool;
-        if (!toolId) return prev;
-        return prev.map((tool) =>
-          tool._id === toolId
-            ? {
-                ...tool,
-                status: "assigned",
-                assignedTo: requests.find((r) => r._id === requestId)?.technician ?? "",
-                assignedAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-              }
-            : tool,
-        );
+    try {
+      const res = await fetch(`/api/requests/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "approve", approver }),
+        credentials: "include",
       });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "No se pudo aprobar la solicitud");
 
-      setMessage("Entrega aprobada (demo)");
-      return;
+      setRequests((prev) => prev.map((req) => (req._id === id ? data.request : req)));
+      fetchData();
+      setMessage("Solicitud aprobada");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error inesperado";
+      setError(message);
     }
-
-    const response = await fetch(`/api/requests/${requestId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "approve", approver }),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      setError(data.message || "No se pudo aprobar la solicitud");
-      return;
-    }
-
-    setMessage("Entrega aprobada y registrada");
-    fetchData();
   }
 
-  async function handleReturn(requestId: string) {
+  async function handleReturn(id: string) {
     resetMessages();
-    const notes = returnNotes[requestId];
+    const notes = returnNotes[id];
 
     if (demoMode) {
       const now = new Date().toISOString();
-      setRequests((prev) =>
-        prev.map((req) =>
-          req._id === requestId
-            ? { ...req, status: "returned", returnedAt: now, returnNotes: notes }
-            : req,
-        ),
+      const updatedRequests = requests.map((req) =>
+        req._id === id
+          ? { ...req, status: "returned", returnedAt: now, returnNotes: notes, updatedAt: now }
+          : req,
       );
-      setTools((prev) => {
-        const request = requests.find((r) => r._id === requestId);
-        const toolId = request?.tool && typeof request.tool !== "string" ? request.tool._id : request?.tool;
-        if (!toolId) return prev;
-        return prev.map((tool) =>
-          tool._id === toolId
-            ? {
-                ...tool,
-                status: "available",
-                assignedTo: null,
-                assignedAt: null,
-                updatedAt: now,
-              }
-            : tool,
+      const returnedTools = requests.find((r) => r._id === id)?.tools as ToolDTO[];
+      if (returnedTools) {
+        setTools((prevTools) =>
+          prevTools.map((tool) =>
+            returnedTools.find((t) => t._id === tool._id)
+              ? { ...tool, status: "available", assignedAt: null, assignedTo: null }
+              : tool,
+          ),
         );
+      }
+      setRequests(updatedRequests);
+      setMessage("Devolución registrada en modo demo");
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/requests/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "return", returnNotes: notes }),
+        credentials: "include",
       });
-      setMessage("Devolución registrada (demo)");
-      return;
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "No se pudo registrar la devolución");
+
+      setRequests((prev) => prev.map((req) => (req._id === id ? data.request : req)));
+      fetchData();
+      setMessage("Devolución registrada");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error inesperado";
+      setError(message);
     }
-
-    const response = await fetch(`/api/requests/${requestId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "return", returnNotes: notes }),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      setError(data.message || "No se pudo registrar la devolución");
-      return;
-    }
-
-    setMessage("Devolución registrada y herramienta disponible");
-    fetchData();
   }
 
-  const inventoryUsage = useMemo(() => {
-    const total = tools.length || 1;
-    const assigned = tools.filter((tool) => tool.status === "assigned").length;
-    return Math.round((assigned / total) * 100);
-  }, [tools]);
+  const toolSelection = (id: string) =>
+    setRequestForm((prev) => ({
+      ...prev,
+      toolIds: prev.toolIds.includes(id)
+        ? prev.toolIds.filter((toolId) => toolId !== id)
+        : [...prev.toolIds, id],
+    }));
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-50">
-      <div className="mx-auto flex max-w-6xl flex-col gap-10 px-4 py-10 lg:px-0">
-        <header className="flex flex-col gap-4 rounded-2xl bg-slate-900/60 p-8 shadow-xl ring-1 ring-white/10 lg:flex-row lg:items-center lg:justify-between">
+    <main className="min-h-screen bg-gradient-to-b from-slate-50 to-white text-slate-900">
+      <div className="mx-auto max-w-6xl px-6 py-10">
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-6">
           <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-emerald-300">Inventario</p>
-            <h1 className="mt-2 text-3xl font-semibold sm:text-4xl">
-              Pañol de herramientas inteligente
+            <p className="text-sm uppercase tracking-[0.25em] text-slate-500">Pañol digital</p>
+            <h1 className="text-3xl font-semibold text-slate-900">
+              Gestión de herramientas y asignaciones
             </h1>
-            <p className="mt-3 max-w-2xl text-slate-200">
-              Controla qué técnico tiene cada herramienta, registra aprobaciones y
-              devoluciones y mantené el stock visible para todo el taller.
+            <p className="mt-2 text-sm text-slate-600">
+              Administra altas de usuarios, stock de herramientas y solicitudes en lote.
             </p>
           </div>
-          <div className="flex gap-4 text-sm text-slate-200">
-            <div className="rounded-xl bg-white/5 px-4 py-3 ring-1 ring-white/10">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Herramientas</p>
-              <p className="mt-1 text-2xl font-semibold">{tools.length}</p>
-            </div>
-            <div className="rounded-xl bg-white/5 px-4 py-3 ring-1 ring-white/10">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Uso</p>
-              <p className="mt-1 text-2xl font-semibold">{inventoryUsage}%</p>
-            </div>
+          <div className="flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-sm text-slate-700">
+            <span className="inline-flex h-3 w-3 rounded-full bg-emerald-500" />
+            {demoMode ? "Modo demo" : adminName ? `Admin: ${adminName}` : "Sin sesión"}
           </div>
         </header>
 
-        {(message || error) && (
-          <div
-            className={`rounded-xl border px-4 py-3 text-sm shadow ${
-              message
-                ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-100"
-                : "border-rose-500/50 bg-rose-500/10 text-rose-100"
-            }`}
-          >
-            {message ?? error}
+        {message && (
+          <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            {message}
+          </div>
+        )}
+        {error && (
+          <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+            {error}
           </div>
         )}
 
-        <section className="grid gap-6 lg:grid-cols-[1.1fr,0.9fr]">
-          <div className="rounded-2xl bg-white/5 p-6 shadow-lg ring-1 ring-white/10">
+        {!demoMode && !adminName && (
+          <section className="mt-8 grid gap-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Nuevo equipo</p>
-                <h2 className="text-xl font-semibold">Registrar herramienta</h2>
+                <h2 className="text-lg font-semibold text-slate-900">Iniciar sesión</h2>
+                <p className="text-sm text-slate-600">Solo administradores pueden gestionar el pañol.</p>
               </div>
             </div>
-            <form className="mt-4 grid gap-4 lg:grid-cols-2" onSubmit={handleCreateTool}>
-              <div className="space-y-2">
-                <label className="text-sm text-slate-200">Nombre</label>
+            <form className="grid gap-3 md:grid-cols-2" onSubmit={handleLogin}>
+              <label className="flex flex-col gap-1 text-sm text-slate-700">
+                Correo del administrador
                 <input
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-emerald-400 focus:bg-white"
-                  value={toolForm.name}
-                  onChange={(e) => setToolForm({ ...toolForm, name: e.target.value })}
+                  type="email"
                   required
+                  value={authForm.email}
+                  onChange={(e) => setAuthForm((prev) => ({ ...prev, email: e.target.value }))}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
                 />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm text-slate-200">Marca</label>
+              </label>
+              <label className="flex flex-col gap-1 text-sm text-slate-700">
+                Contraseña
                 <input
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-emerald-400 focus:bg-white"
-                  value={toolForm.brand}
-                  onChange={(e) => setToolForm({ ...toolForm, brand: e.target.value })}
+                  type="password"
                   required
+                  value={authForm.password}
+                  onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
                 />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm text-slate-200">Modelo</label>
-                <input
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-emerald-400 focus:bg-white"
-                  value={toolForm.model}
-                  onChange={(e) => setToolForm({ ...toolForm, model: e.target.value })}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm text-slate-200">Descripción</label>
-                <input
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-emerald-400 focus:bg-white"
-                  value={toolForm.description}
-                  onChange={(e) =>
-                    setToolForm({ ...toolForm, description: e.target.value })
-                  }
-                  placeholder="Taladro, llave, calibrador..."
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm text-slate-200">Estantería</label>
-                <input
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-emerald-400 focus:bg-white"
-                  value={toolForm.location.shelf}
-                  onChange={(e) =>
-                    setToolForm({
-                      ...toolForm,
-                      location: { ...toolForm.location, shelf: e.target.value },
-                    })
-                  }
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm text-slate-200">Columna</label>
-                <input
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-emerald-400 focus:bg-white"
-                  value={toolForm.location.column}
-                  onChange={(e) =>
-                    setToolForm({
-                      ...toolForm,
-                      location: { ...toolForm.location, column: e.target.value },
-                    })
-                  }
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm text-slate-200">Fila</label>
-                <input
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-emerald-400 focus:bg-white"
-                  value={toolForm.location.row}
-                  onChange={(e) =>
-                    setToolForm({
-                      ...toolForm,
-                      location: { ...toolForm.location, row: e.target.value },
-                    })
-                  }
-                  required
-                />
-              </div>
-              <div className="lg:col-span-2">
+              </label>
+              <div className="flex items-end gap-3">
                 <button
                   type="submit"
-                  className="inline-flex w-full items-center justify-center rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-emerald-950 shadow transition hover:bg-emerald-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300"
+                  className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
                 >
-                  Guardar herramienta
+                  Entrar
                 </button>
+                {loading && <span className="text-xs text-slate-500">Cargando datos…</span>}
               </div>
             </form>
-          </div>
+          </section>
+        )}
 
-          <div className="rounded-2xl bg-white/5 p-6 shadow-lg ring-1 ring-white/10">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Entrega</p>
-                <h2 className="text-xl font-semibold">Solicitar herramienta</h2>
-              </div>
-              <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-slate-200">
-                Real-time
-              </span>
-            </div>
-            <form className="mt-4 space-y-3" onSubmit={handleCreateRequest}>
-              <div className="space-y-2">
-                <label className="text-sm text-slate-200">Herramienta disponible</label>
-                <select
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-emerald-400 focus:bg-white"
-                  value={requestForm.toolId}
-                  onChange={(e) => setRequestForm({ ...requestForm, toolId: e.target.value })}
-                  required
-                  disabled={availableTools.length === 0}
-                >
-                  <option value="">Seleccionar</option>
-                  {availableTools.map((tool) => (
-                    <option key={tool._id} value={tool._id}>
-                      {tool.name} · {tool.brand} {tool.model}
-                    </option>
-                  ))}
-                </select>
-                {availableTools.length === 0 && (
-                  <p className="text-xs text-amber-200">
-                    No hay herramientas disponibles en este momento.
-                  </p>
-                )}
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm text-slate-200">Técnico</label>
-                <input
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-emerald-400 focus:bg-white"
-                  value={requestForm.technician}
-                  onChange={(e) =>
-                    setRequestForm({ ...requestForm, technician: e.target.value })
-                  }
-                  placeholder="Nombre y apellido"
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm text-slate-200">Propósito</label>
-                <textarea
-                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-emerald-400 focus:bg-white"
-                  value={requestForm.purpose}
-                  onChange={(e) =>
-                    setRequestForm({ ...requestForm, purpose: e.target.value })
-                  }
-                  rows={3}
-                  placeholder="Ej: Cambio de rotor, inspección, calibración"
-                />
-              </div>
-              <button
-                type="submit"
-                className="inline-flex w-full items-center justify-center rounded-lg bg-indigo-400 px-4 py-3 text-sm font-semibold text-indigo-950 shadow transition hover:bg-indigo-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-200 disabled:cursor-not-allowed disabled:bg-slate-500"
-                disabled={availableTools.length === 0}
-              >
-                Enviar solicitud
-              </button>
-            </form>
-          </div>
-        </section>
-
-        <section className="grid gap-6 lg:grid-cols-2">
-          <div className="rounded-2xl bg-white/5 p-6 shadow-lg ring-1 ring-white/10">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Aprobaciones</p>
-                <h2 className="text-xl font-semibold">Solicitudes pendientes</h2>
-              </div>
-              <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-slate-200">
-                {pendingRequests.length} pendientes
-              </span>
-            </div>
-            <div className="mt-4 space-y-4">
-              {pendingRequests.length === 0 && (
-                <p className="text-sm text-slate-200">No hay solicitudes por aprobar.</p>
-              )}
-              {pendingRequests.map((request) => (
-                <div
-                  key={request._id}
-                  className="space-y-3 rounded-xl border border-white/10 bg-slate-900/60 p-4 shadow"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-sm text-slate-300">{request.technician}</p>
-                      <p className="text-base font-semibold text-white">
-                        {(request.tool as ToolDTO)?.name ?? "Herramienta"}
-                      </p>
-                      <p className="text-xs text-slate-400">{request.purpose || "Sin detalle"}</p>
-                    </div>
-                    <span className={`rounded-full px-3 py-1 text-xs font-medium ${statusStyles[request.status]}`}>
-                      {request.status}
-                    </span>
+        {(demoMode || adminName) && (
+          <>
+            <section className="mt-8 grid gap-4 md:grid-cols-3">
+              <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Solicitudes pendientes</p>
+                    <p className="mt-2 text-3xl font-semibold text-slate-900">{pendingRequests.length}</p>
                   </div>
-                  <div className="grid gap-3 md:grid-cols-[1fr,160px] md:items-center">
-                    <input
-                      className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-slate-900 outline-none transition focus:border-emerald-400 focus:bg-white"
-                      placeholder="Aprobado por"
-                      value={approvers[request._id] || ""}
-                      onChange={(e) =>
-                        setApprovers({ ...approvers, [request._id]: e.target.value })
-                      }
-                    />
+                  <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
+                    Aprobación
+                  </span>
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Asignadas</p>
+                    <p className="mt-2 text-3xl font-semibold text-slate-900">{activeAssignments.length}</p>
+                  </div>
+                  <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+                    En uso
+                  </span>
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Disponibles</p>
+                    <p className="mt-2 text-3xl font-semibold text-slate-900">{availableTools.length}</p>
+                  </div>
+                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+                    Stock
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            <section className="mt-8 grid gap-6 md:grid-cols-3">
+              <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-900">Alta de herramienta</h2>
+                    <p className="text-sm text-slate-600">Solo administradores pueden crear/editar.</p>
+                  </div>
+                  {!demoMode && (
                     <button
-                      className="inline-flex items-center justify-center rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-400"
-                      onClick={() => handleApprove(request._id)}
+                      type="button"
+                      onClick={handleLogout}
+                      className="text-xs font-medium text-rose-600 hover:text-rose-700"
                     >
-                      Aprobar entrega
+                      Cerrar sesión
                     </button>
+                  )}
+                </div>
+                <form className="space-y-3" onSubmit={handleCreateTool}>
+                  <div className="grid grid-cols-2 gap-3">
+                    <input
+                      required
+                      placeholder="Nombre"
+                      value={toolForm.name}
+                      onChange={(e) => setToolForm((prev) => ({ ...prev, name: e.target.value }))}
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                    />
+                    <input
+                      required
+                      placeholder="Marca"
+                      value={toolForm.brand}
+                      onChange={(e) => setToolForm((prev) => ({ ...prev, brand: e.target.value }))}
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                    />
                   </div>
-                  <p className="text-xs text-slate-400">
-                    Solicitado: {formatDate(request.requestedAt)}
+                  <input
+                    required
+                    placeholder="Modelo"
+                    value={toolForm.model}
+                    onChange={(e) => setToolForm((prev) => ({ ...prev, model: e.target.value }))}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                  />
+                  <textarea
+                    placeholder="Descripción"
+                    value={toolForm.description}
+                    onChange={(e) =>
+                      setToolForm((prev) => ({ ...prev, description: e.target.value }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                  />
+                  <div className="grid grid-cols-3 gap-3">
+                    <input
+                      required
+                      placeholder="Estantería"
+                      value={toolForm.location.shelf}
+                      onChange={(e) =>
+                        setToolForm((prev) => ({
+                          ...prev,
+                          location: { ...prev.location, shelf: e.target.value },
+                        }))
+                      }
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                    />
+                    <input
+                      required
+                      placeholder="Columna"
+                      value={toolForm.location.column}
+                      onChange={(e) =>
+                        setToolForm((prev) => ({
+                          ...prev,
+                          location: { ...prev.location, column: e.target.value },
+                        }))
+                      }
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                    />
+                    <input
+                      required
+                      placeholder="Fila"
+                      value={toolForm.location.row}
+                      onChange={(e) =>
+                        setToolForm((prev) => ({
+                          ...prev,
+                          location: { ...prev.location, row: e.target.value },
+                        }))
+                      }
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="mt-2 inline-flex w-full items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+                  >
+                    Crear herramienta
+                  </button>
+                </form>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="mb-4">
+                  <h2 className="text-lg font-semibold text-slate-900">Alta de usuario</h2>
+                  <p className="text-sm text-slate-600">
+                    Carga nombre, apellido y DNI. El DNI se usará para solicitar herramientas.
                   </p>
                 </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-2xl bg-white/5 p-6 shadow-lg ring-1 ring-white/10">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">En uso</p>
-                <h2 className="text-xl font-semibold">Herramientas asignadas</h2>
-              </div>
-              <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-slate-200">
-                {activeAssignments.length} activas
-              </span>
-            </div>
-            <div className="mt-4 space-y-4">
-              {activeAssignments.length === 0 && (
-                <p className="text-sm text-slate-200">Sin entregas activas.</p>
-              )}
-              {activeAssignments.map((request) => {
-                const tool = request.tool as ToolDTO;
-                return (
-                  <div
-                    key={request._id}
-                    className="space-y-3 rounded-xl border border-white/10 bg-slate-900/60 p-4 shadow"
+                <form className="space-y-3" onSubmit={handleCreateUser}>
+                  <div className="grid grid-cols-2 gap-3">
+                    <input
+                      required
+                      placeholder="Nombre"
+                      value={userForm.firstName}
+                      onChange={(e) => setUserForm((prev) => ({ ...prev, firstName: e.target.value }))}
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                    />
+                    <input
+                      required
+                      placeholder="Apellido"
+                      value={userForm.lastName}
+                      onChange={(e) => setUserForm((prev) => ({ ...prev, lastName: e.target.value }))}
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                    />
+                  </div>
+                  <input
+                    required
+                    placeholder="DNI"
+                    value={userForm.dni}
+                    onChange={(e) => setUserForm((prev) => ({ ...prev, dni: e.target.value }))}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    className="mt-2 inline-flex w-full items-center justify-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="text-sm text-slate-300">{request.technician}</p>
-                        <p className="text-base font-semibold text-white">{tool.name}</p>
-                        <p className="text-xs text-slate-400">
-                          {tool.brand} {tool.model} · Est. {tool.location.shelf}, Col. {tool.location.column}, Fila {tool.location.row}
-                        </p>
-                      </div>
-                      <span className={`rounded-full px-3 py-1 text-xs font-medium ${statusStyles[request.status]}`}>
-                        {request.status}
-                      </span>
-                    </div>
-                    <div className="grid gap-3 md:grid-cols-[1fr,160px] md:items-center">
-                      <input
-                        className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-slate-900 outline-none transition focus:border-emerald-400 focus:bg-white"
-                        placeholder="Notas de devolución"
-                        value={returnNotes[request._id] || ""}
-                        onChange={(e) =>
-                          setReturnNotes({ ...returnNotes, [request._id]: e.target.value })
-                        }
-                      />
-                      <button
-                        className="inline-flex items-center justify-center rounded-lg bg-blue-400 px-4 py-2 text-sm font-semibold text-blue-950 transition hover:bg-blue-300"
-                        onClick={() => handleReturn(request._id)}
-                      >
-                        Registrar devolución
-                      </button>
-                    </div>
-                    <div className="text-xs text-slate-400">
-                      Aprobado: {formatDate(request.approvedAt)}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </section>
+                    Crear usuario
+                  </button>
+                </form>
+              </div>
 
-        <section className="rounded-2xl bg-white/5 p-6 shadow-lg ring-1 ring-white/10">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-emerald-300">Inventario</p>
-              <h2 className="text-xl font-semibold">Listado completo</h2>
-            </div>
-            <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-slate-200">
-              {tools.length} registros
-            </span>
-          </div>
-          <div className="mt-4 overflow-hidden rounded-xl border border-white/10 bg-slate-900/60">
-            <div className="grid grid-cols-6 gap-4 border-b border-white/5 px-4 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">
-              <div className="col-span-2">Herramienta</div>
-              <div>Ubicación</div>
-              <div>Estado</div>
-              <div>Asignado a</div>
-              <div>Actualizado</div>
-            </div>
-            <div className="divide-y divide-white/5 text-sm">
-              {loading && (
-                <div className="px-4 py-4 text-slate-200">Cargando datos...</div>
-              )}
-              {!loading && tools.length === 0 && (
-                <div className="px-4 py-4 text-slate-200">Sin herramientas registradas.</div>
-              )}
-              {!loading &&
-                tools.map((tool) => (
-                  <div key={tool._id} className="grid grid-cols-6 gap-4 px-4 py-3">
-                    <div className="col-span-2">
-                      <p className="font-medium text-white">{tool.name}</p>
-                      <p className="text-xs text-slate-400">{tool.brand} · {tool.model}</p>
+              <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="mb-4">
+                  <h2 className="text-lg font-semibold text-slate-900">Solicitud en lote</h2>
+                  <p className="text-sm text-slate-600">
+                    Selecciona varias herramientas y vincula al técnico por DNI.
+                  </p>
+                </div>
+                <form className="space-y-3" onSubmit={handleCreateRequest}>
+                  <input
+                    required
+                    placeholder="DNI del técnico"
+                    value={requestForm.technicianDni}
+                    onChange={(e) =>
+                      setRequestForm((prev) => ({ ...prev, technicianDni: e.target.value }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                  />
+                  <textarea
+                    placeholder="Propósito (opcional)"
+                    value={requestForm.purpose}
+                    onChange={(e) => setRequestForm((prev) => ({ ...prev, purpose: e.target.value }))}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                  />
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      Herramientas disponibles
+                    </p>
+                    <div className="grid max-h-40 grid-cols-2 gap-2 overflow-y-auto rounded-lg border border-slate-200 p-2">
+                      {availableTools.length === 0 && (
+                        <p className="col-span-2 text-sm text-slate-500">No hay stock disponible</p>
+                      )}
+                      {availableTools.map((tool) => (
+                        <label
+                          key={tool._id}
+                          className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1 text-sm hover:bg-slate-50"
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            checked={requestForm.toolIds.includes(tool._id)}
+                            onChange={() => toolSelection(tool._id)}
+                          />
+                          <div>
+                            <p className="font-medium text-slate-800">{tool.name}</p>
+                            <p className="text-xs text-slate-500">
+                              {tool.brand} · {tool.model} · Ubicación {tool.location.shelf}-
+                              {tool.location.column}-{tool.location.row}
+                            </p>
+                          </div>
+                        </label>
+                      ))}
                     </div>
-                    <div className="text-slate-200">
-                      Est. {tool.location.shelf}, Col. {tool.location.column}, Fila {tool.location.row}
-                    </div>
-                    <div>
-                      <span className={`rounded-full px-3 py-1 text-xs font-medium ${statusStyles[tool.status]}`}>
-                        {tool.status === "available" ? "Disponible" : "Asignada"}
-                      </span>
-                    </div>
-                    <div className="text-slate-200">{tool.assignedTo || "-"}</div>
-                    <div className="text-slate-200">{formatDate(tool.updatedAt)}</div>
                   </div>
-                ))}
-            </div>
-          </div>
-        </section>
+                  <button
+                    type="submit"
+                    className="mt-2 inline-flex w-full items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+                  >
+                    Generar solicitud
+                  </button>
+                </form>
+              </div>
+            </section>
+
+            <section className="mt-8 grid gap-6 lg:grid-cols-2">
+              <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-semibold text-slate-900">Solicitudes</h2>
+                  <span className="text-sm text-slate-500">{requests.length} registradas</span>
+                </div>
+                <div className="mt-4 space-y-3">
+                  {requests.length === 0 && (
+                    <p className="text-sm text-slate-500">Aún no hay solicitudes</p>
+                  )}
+                  {requests.map((request) => (
+                    <div
+                      key={request._id}
+                      className="rounded-lg border border-slate-200 p-4 shadow-sm"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">
+                            {request.technicianName}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            DNI {(request.user as UserDTO).dni} · {request.purpose || "Sin detalle"}
+                          </p>
+                        </div>
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[request.status]}`}
+                        >
+                          {request.status}
+                        </span>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {(request.tools as ToolDTO[]).map((tool) => (
+                          <span
+                            key={tool._id}
+                            className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-700"
+                          >
+                            {tool.name}
+                            <span className="text-[10px] text-slate-500">
+                              {tool.location.shelf}-{tool.location.column}-{tool.location.row}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                      <div className="mt-3 grid gap-3 text-xs text-slate-600 md:grid-cols-3">
+                        <div>
+                          <p className="font-semibold text-slate-700">Solicitada</p>
+                          <p>{formatDate(request.requestedAt)}</p>
+                        </div>
+                        <div>
+                          <p className="font-semibold text-slate-700">Aprobada</p>
+                          <p>{formatDate(request.approvedAt)}</p>
+                        </div>
+                        <div>
+                          <p className="font-semibold text-slate-700">Devuelta</p>
+                          <p>{formatDate(request.returnedAt)}</p>
+                        </div>
+                      </div>
+
+                      {request.status === "pending" && (
+                        <div className="mt-4 grid gap-2 md:grid-cols-[1fr_auto] md:items-end">
+                          <input
+                            placeholder="Nombre del aprobador"
+                            value={approvers[request._id] ?? ""}
+                            onChange={(e) =>
+                              setApprovers((prev) => ({ ...prev, [request._id]: e.target.value }))
+                            }
+                            className="rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                          />
+                          <button
+                            onClick={() => handleApprove(request._id)}
+                            className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+                          >
+                            Aprobar entrega
+                          </button>
+                        </div>
+                      )}
+
+                      {request.status === "approved" && (
+                        <div className="mt-4 grid gap-2 md:grid-cols-[1fr_auto] md:items-end">
+                          <textarea
+                            placeholder="Notas de devolución (opcional)"
+                            value={returnNotes[request._id] ?? ""}
+                            onChange={(e) =>
+                              setReturnNotes((prev) => ({ ...prev, [request._id]: e.target.value }))
+                            }
+                            className="rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none"
+                          />
+                          <button
+                            onClick={() => handleReturn(request._id)}
+                            className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
+                          >
+                            Registrar devolución
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-slate-900">Inventario</h2>
+                    <span className="text-sm text-slate-500">{tools.length} herramientas</span>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {tools.length === 0 && (
+                      <p className="text-sm text-slate-500">No hay herramientas registradas</p>
+                    )}
+                    {tools.map((tool) => (
+                      <div
+                        key={tool._id}
+                        className="rounded-lg border border-slate-200 p-4 shadow-sm"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{tool.name}</p>
+                            <p className="text-xs text-slate-500">
+                              {tool.brand} · {tool.model}
+                            </p>
+                          </div>
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[tool.status]}`}
+                          >
+                            {tool.status}
+                          </span>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
+                          <p>
+                            Ubicación: {tool.location.shelf}-{tool.location.column}-{tool.location.row}
+                          </p>
+                          <p>Asignada a: {tool.assignedTo || "-"}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-slate-900">Usuarios</h2>
+                    <span className="text-sm text-slate-500">{users.length} técnicos</span>
+                  </div>
+                  <div className="mt-4 space-y-2">
+                    {users.length === 0 && (
+                      <p className="text-sm text-slate-500">Aún no hay usuarios</p>
+                    )}
+                    {users.map((user) => (
+                      <div
+                        key={user._id}
+                        className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm"
+                      >
+                        <div>
+                          <p className="font-semibold text-slate-900">
+                            {user.firstName} {user.lastName}
+                          </p>
+                          <p className="text-xs text-slate-500">DNI {user.dni}</p>
+                        </div>
+                        <span className="text-xs text-slate-500">Alta: {formatDate(user.createdAt)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+          </>
+        )}
       </div>
-    </div>
+    </main>
   );
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+import { requireAdminSession } from "@/lib/auth";
 import { dbConnect } from "@/lib/mongoose";
 import { Tool } from "@/models/Tool";
 
@@ -23,6 +24,7 @@ export async function PATCH(
   { params }: { params: { id: string } },
 ) {
   try {
+    requireAdminSession();
     const payload = await request.json();
     const data = updateSchema.parse(payload);
 
@@ -41,6 +43,10 @@ export async function PATCH(
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ message: error.message }, { status: 400 });
+    }
+
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return NextResponse.json({ message: "No autorizado" }, { status: 401 });
     }
 
     console.error(`PATCH /api/tools/${params.id} error`, error);

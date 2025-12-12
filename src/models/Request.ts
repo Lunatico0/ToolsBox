@@ -1,11 +1,13 @@
 import { Schema, model, models, type Document } from "mongoose";
 import type { ToolDocument } from "./Tool";
+import type { UserDocument } from "./User";
 
 export type RequestStatus = "pending" | "approved" | "returned";
 
 export interface RequestDocument extends Document {
-  tool: ToolDocument["_id"];
-  technician: string;
+  tools: ToolDocument["_id"][];
+  user: UserDocument["_id"];
+  technicianName: string;
   purpose?: string;
   status: RequestStatus;
   approver?: string;
@@ -19,8 +21,9 @@ export interface RequestDocument extends Document {
 
 const requestSchema = new Schema<RequestDocument>(
   {
-    tool: { type: Schema.Types.ObjectId, ref: "Tool", required: true },
-    technician: { type: String, required: true, trim: true },
+    tools: [{ type: Schema.Types.ObjectId, ref: "Tool", required: true }],
+    user: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    technicianName: { type: String, required: true, trim: true },
     purpose: { type: String, trim: true },
     status: {
       type: String,

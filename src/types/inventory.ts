@@ -1,5 +1,15 @@
 import type { RequestStatus } from "@/models/Request";
 import type { ToolStatus } from "@/models/Tool";
+import type { UserDocument } from "@/models/User";
+
+export type UserDTO = {
+  _id: string;
+  firstName: string;
+  lastName: string;
+  dni: string;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export type ToolLocation = {
   shelf: string;
@@ -23,8 +33,9 @@ export type ToolDTO = {
 
 export type RequestDTO = {
   _id: string;
-  tool: ToolDTO | string;
-  technician: string;
+  tools: ToolDTO[] | string[];
+  user: UserDTO | UserDocument["_id"];
+  technicianName: string;
   purpose?: string;
   status: RequestStatus;
   approver?: string;
