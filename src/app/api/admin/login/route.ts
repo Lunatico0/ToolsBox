@@ -42,7 +42,7 @@ export async function POST(request: Request) {
     }
 
     const token = signAdminToken(admin._id.toString());
-    setAuthCookie(token);
+    await setAuthCookie(token);
 
     return NextResponse.json({
       admin: {

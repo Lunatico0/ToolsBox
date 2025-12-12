@@ -15,7 +15,7 @@ const createSchema = z.object({
 
 export async function GET() {
   try {
-    requireAdminSession();
+    await requireAdminSession();
   } catch {
     return NextResponse.json({ message: "No autorizado" }, { status: 401 });
   }

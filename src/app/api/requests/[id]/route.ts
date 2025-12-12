@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { requireAdminSession } from "@/lib/auth";
@@ -13,16 +13,19 @@ const actionSchema = z.object({
 });
 
 export async function PATCH(
-  request: Request,
-  { params }: { params: { id: string } },
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
 ) {
+  let requestId: string | undefined;
   try {
-    requireAdminSession();
+    await requireAdminSession();
+    const { id } = await params;
+    requestId = id;
     const payload = await request.json();
     const data = actionSchema.parse(payload);
 
     await dbConnect();
-    const existing = await RequestModel.findById(params.id)
+    const existing = await RequestModel.findById(requestId)
       .populate("tools")
       .populate("user");
 
@@ -105,7 +108,7 @@ export async function PATCH(
       return NextResponse.json({ message: "No autorizado" }, { status: 401 });
     }
 
-    console.error(`PATCH /api/requests/${params.id} error`, error);
+    console.error(`PATCH /api/requests/${requestId ?? "unknown"} error`, error);
     return NextResponse.json({ message: "Unexpected error" }, { status: 500 });
   }
 }

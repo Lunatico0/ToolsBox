@@ -13,7 +13,7 @@ const userSchema = z.object({
 
 export async function GET() {
   try {
-    requireAdminSession();
+    await requireAdminSession();
   } catch {
     return NextResponse.json({ message: "No autorizado" }, { status: 401 });
   }
@@ -25,7 +25,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    requireAdminSession();
+    await requireAdminSession();
     const payload = await request.json();
     const data = userSchema.parse(payload);
 

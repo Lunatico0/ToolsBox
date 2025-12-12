@@ -25,7 +25,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    requireAdminSession();
+    await requireAdminSession();
     const payload = await request.json();
     const data = toolSchema.parse(payload);
 

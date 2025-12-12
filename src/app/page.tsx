@@ -503,7 +503,7 @@ export default function Home() {
           ),
         );
       }
-      setRequests(updatedRequests);
+      setRequests(updatedRequests as RequestDTO[]);
       setMessage("Devolución registrada en modo demo");
       return;
     }
