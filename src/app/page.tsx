@@ -536,7 +536,7 @@ export default function Home() {
     }));
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-slate-50 to-white text-slate-900">
+    <main className="min-h-screen bg-linear-to-b from-slate-50 to-white text-slate-900">
       <div className="mx-auto max-w-6xl px-6 py-10">
         <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-6">
           <div>

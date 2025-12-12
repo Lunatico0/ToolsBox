@@ -2,7 +2,7 @@ import { Schema, model, models, type Document } from "mongoose";
 
 export type ToolStatus = "available" | "assigned";
 
-export interface ToolDocument extends Document {
+export interface ToolDocument extends Omit<Document, "model"> {
   name: string;
   brand: string;
   model: string;
