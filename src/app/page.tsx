@@ -441,11 +441,11 @@ export default function Home() {
             prevTools.map((tool) =>
               (req.tools as ToolDTO[]).find((t) => t._id === tool._id)
                 ? {
-                    ...tool,
-                    status: "assigned",
-                    assignedTo: req.technicianName,
-                    assignedAt: now,
-                  }
+                  ...tool,
+                  status: "assigned",
+                  assignedTo: req.technicianName,
+                  assignedAt: now,
+                }
                 : tool,
             ),
           );
@@ -540,7 +540,7 @@ export default function Home() {
       <div className="mx-auto max-w-6xl px-6 py-10">
         <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-6">
           <div>
-            <p className="text-sm uppercase tracking-[0.25em] text-slate-500">Tablero digital</p>
+            <p className="text-sm uppercase tracking-[0.25em] text-slate-500">Pañol digital</p>
             <h1 className="text-3xl font-semibold text-slate-900">
               Gestión de herramientas y asignaciones
             </h1>

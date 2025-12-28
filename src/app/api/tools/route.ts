@@ -1,47 +1,41 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { ToolsRepository } from "@/modules/tools/tool.repository";
+import { createToolInputSchema } from "@/modules/tools/tool.types";
 
-import { requireAdminSession } from "@/lib/auth";
-import { dbConnect } from "@/lib/mongoose";
-import { Tool } from "@/models/Tool";
+const toolsRepo = new ToolsRepository();
 
-const toolSchema = z.object({
-  name: z.string().min(2),
-  brand: z.string().min(2),
-  model: z.string().min(1),
-  description: z.string().optional(),
-  location: z.object({
-    shelf: z.string().min(1),
-    column: z.string().min(1),
-    row: z.string().min(1),
-  }),
-});
+/**
+ * POST /api/tools
+ * Alta de herramienta (ADMIN)
+ */
+export async function POST(req: NextRequest) {
+  try {
+    const body = createToolInputSchema.parse(await req.json());
 
-export async function GET() {
-  await dbConnect();
-  const tools = await Tool.find().sort({ createdAt: -1 });
-  return NextResponse.json({ tools });
+    const tool = await toolsRepo.create(body);
+
+    return NextResponse.json(tool, { status: 201 });
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err.message },
+      { status: 400 }
+    );
+  }
 }
 
-export async function POST(request: Request) {
+/**
+ * GET /api/tools
+ * Listado completo de herramientas
+ */
+export async function GET() {
   try {
-    await requireAdminSession();
-    const payload = await request.json();
-    const data = toolSchema.parse(payload);
-
-    await dbConnect();
-    const tool = await Tool.create({ ...data });
-    return NextResponse.json({ tool }, { status: 201 });
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ message: error.message }, { status: 400 });
-    }
-
-    if (error instanceof Error && error.message === "Unauthorized") {
-      return NextResponse.json({ message: "No autorizado" }, { status: 401 });
-    }
-
-    console.error("POST /api/tools error", error);
-    return NextResponse.json({ message: "Unexpected error" }, { status: 500 });
+    const tools = await toolsRepo.findAll();
+    return NextResponse.json(tools);
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err.message },
+      { status: 500 }
+    );
   }
 }
